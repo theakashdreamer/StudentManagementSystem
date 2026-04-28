@@ -1,0 +1,1273 @@
+package com.skysoftsolutions.sekcustomer.nipunTalika;
+
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.cardview.widget.CardView;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import com.google.android.material.button.MaterialButton;
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
+import com.skysoftsolutions.sekcustomer.R;
+import com.skysoftsolutions.sekcustomer.nipunTalika.entity.ClassModel;
+import com.skysoftsolutions.sekcustomer.nipunTalika.entity.CompetencyModel;
+import com.skysoftsolutions.sekcustomer.nipunTalika.entity.StudentModel;
+import com.skysoftsolutions.sekcustomer.nipunTalika.entity.SubjectModel;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+public class Nipun_Taliika_Activity extends AppCompatActivity {
+
+    private Spinner spinnerClass, spinnerSubject;
+    private EditText etSearch;
+    private RecyclerView recyclerViewStudents;
+    private TextView tvTotalCount, tvListTitle;
+    private ExtendedFloatingActionButton btnSaveSurvey;
+
+    private final ArrayList<ClassModel> classList = new ArrayList<>();
+    private final ArrayList<SubjectModel> subjectList = new ArrayList<>();
+
+    private final ArrayList<StudentModel> allStudentsList = new ArrayList<>();
+    private final ArrayList<StudentModel> classWiseStudentsList = new ArrayList<>();
+
+    private final ArrayList<CompetencyModel> allCompetencyList = new ArrayList<>();
+    private final ArrayList<CompetencyModel> filteredCompetencyList = new ArrayList<>();
+
+    private CompetencyAdapter competencyAdapter;
+
+    private int selectedClassId = 1;
+    private int selectedSubjectId = 1;
+
+    private String selectedClassName = "Class 1";
+    private String selectedSubjectName = "Hindi";
+    private String searchText = "";
+
+    /*
+     * Key   = competencyId
+     * Value = selected student IDs under this competency
+     *
+     * Example:
+     * competencyId 1 -> [studentId 1, studentId 2]
+     * competencyId 2 -> [studentId 1, studentId 4]
+     */
+    private final Map<Integer, Set<Integer>> competencyStudentSelectionMap = new HashMap<>();
+    private void saveSingleCompetencyData(CompetencyModel competency) {
+        Set<Integer> selectedStudents =
+                competencyStudentSelectionMap.get(competency.getCompetencyId());
+
+        if (selectedStudents == null || selectedStudents.isEmpty()) {
+            Toast.makeText(
+                    this,
+                    "Please select at least one student for this competency",
+                    Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        builder.append("Competency Saved\n\n");
+        builder.append("Competency ID: ")
+                .append(competency.getCompetencyId())
+                .append("\n");
+
+        builder.append("LO Code: ")
+                .append(competency.getLoCode())
+                .append("\n");
+
+        builder.append("Competency: ")
+                .append(competency.getCompetencyName())
+                .append("\n");
+
+        builder.append("Class ID: ")
+                .append(competency.getClassId())
+                .append("\n");
+
+        builder.append("Class: ")
+                .append(selectedClassName)
+                .append("\n");
+
+        builder.append("Subject ID: ")
+                .append(competency.getSubjectId())
+                .append("\n");
+
+        builder.append("Subject: ")
+                .append(selectedSubjectName)
+                .append("\n\n");
+
+        builder.append("Selected Students:\n");
+
+        for (StudentModel student : classWiseStudentsList) {
+            if (selectedStudents.contains(student.getStudentId())) {
+                builder.append("- Student ID: ")
+                        .append(student.getStudentId())
+                        .append(", ")
+                        .append(student.getStudentName())
+                        .append("\n");
+            }
+        }
+
+        Toast.makeText(this, builder.toString(), Toast.LENGTH_LONG).show();
+
+        /*
+         * SQLite save logic example:
+         *
+         * 1. Delete old saved data for this competency + class + subject
+         * 2. Insert fresh selected student rows
+         *
+         * DELETE FROM competency_student_result
+         * WHERE competency_id = ?
+         * AND class_id = ?
+         * AND subject_id = ?;
+         *
+         * INSERT INTO competency_student_result (
+         *     competency_id,
+         *     lo_code,
+         *     class_id,
+         *     subject_id,
+         *     student_id,
+         *     is_checked,
+         *     created_at,
+         *     updated_at
+         * ) VALUES (?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'));
+         */
+    }
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        EdgeToEdge.enable(this);
+        setContentView(R.layout.activity_nipun_taliika);
+
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
+            return insets;
+        });
+
+        initViews();
+        setupSchoolInfo();
+
+        loadClasses();
+        loadSubjects();
+        loadStudents();
+        loadCompetencies();
+
+        setupSpinners();
+        setupRecyclerView();
+        setupSearch();
+        setupSaveButton();
+
+        applyFilter();
+    }
+
+    private void initViews() {
+        spinnerClass = findViewById(R.id.spinnerClass);
+        spinnerSubject = findViewById(R.id.spinnerSubject);
+        etSearch = findViewById(R.id.etSearch);
+        recyclerViewStudents = findViewById(R.id.recyclerViewStudents);
+        tvTotalCount = findViewById(R.id.tvTotalCount);
+        tvListTitle = findViewById(R.id.tvListTitle);
+        btnSaveSurvey = findViewById(R.id.btnSaveSurvey);
+    }
+
+    private void setupSchoolInfo() {
+        TextView tvSchoolName = findViewById(R.id.tvSchoolName);
+        TextView tvSchoolAddress = findViewById(R.id.tvSchoolAddress);
+        TextView tvUdiseCode = findViewById(R.id.tvUdiseCode);
+        TextView tvSurveyDate = findViewById(R.id.tvSurveyDate);
+
+        tvSchoolName.setText("Green Valley Public School");
+        tvSchoolAddress.setText("Lucknow, Uttar Pradesh");
+        tvUdiseCode.setText("UDISE: 09270100101");
+        tvSurveyDate.setText("Date: 28 Apr 2026");
+    }
+
+    private void loadClasses() {
+        classList.clear();
+
+        classList.add(new ClassModel(1, "Class 1"));
+        classList.add(new ClassModel(2, "Class 2"));
+        classList.add(new ClassModel(3, "Class 3"));
+        classList.add(new ClassModel(4, "Class 4"));
+        classList.add(new ClassModel(5, "Class 5"));
+        classList.add(new ClassModel(6, "Class 6"));
+        classList.add(new ClassModel(7, "Class 7"));
+        classList.add(new ClassModel(8, "Class 8"));
+    }
+
+    private void loadSubjects() {
+        subjectList.clear();
+
+        subjectList.add(new SubjectModel(1, "Hindi"));
+        subjectList.add(new SubjectModel(2, "English"));
+        subjectList.add(new SubjectModel(3, "Math"));
+        subjectList.add(new SubjectModel(4, "EVS"));
+        subjectList.add(new SubjectModel(5, "Science"));
+        subjectList.add(new SubjectModel(6, "Social Science"));
+    }
+
+    private void setupSpinners() {
+        ArrayAdapter<ClassModel> classAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                classList
+        );
+
+        ArrayAdapter<SubjectModel> subjectAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                subjectList
+        );
+
+        spinnerClass.setAdapter(classAdapter);
+        spinnerSubject.setAdapter(subjectAdapter);
+
+        spinnerClass.setSelection(0);
+        spinnerSubject.setSelection(0);
+
+        spinnerClass.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                ClassModel selectedClass = classList.get(position);
+
+                selectedClassId = selectedClass.getClassId();
+                selectedClassName = selectedClass.getClassName();
+
+                applyFilter();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+
+        spinnerSubject.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                SubjectModel selectedSubject = subjectList.get(position);
+
+                selectedSubjectId = selectedSubject.getSubjectId();
+                selectedSubjectName = selectedSubject.getSubjectName();
+
+                applyFilter();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+    }
+
+    private void setupRecyclerView() {
+        competencyAdapter = new CompetencyAdapter(
+                filteredCompetencyList,
+                classWiseStudentsList,
+                competencyStudentSelectionMap
+        );
+
+        recyclerViewStudents.setLayoutManager(new LinearLayoutManager(this));
+        recyclerViewStudents.setAdapter(competencyAdapter);
+    }
+
+    private void setupSearch() {
+        etSearch.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                searchText = s.toString().trim();
+                applyFilter();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+    }
+
+    private void setupSaveButton() {
+        btnSaveSurvey.setOnClickListener(v -> saveSurveyData());
+    }
+
+    private void loadStudents() {
+        allStudentsList.clear();
+
+        // Class 1
+        allStudentsList.add(new StudentModel(1, "Aarav Sharma", 1, "Class 1", 1));
+        allStudentsList.add(new StudentModel(2, "Anaya Gupta", 1, "Class 1", 2));
+        allStudentsList.add(new StudentModel(3, "Vivaan Singh", 1, "Class 1", 3));
+        allStudentsList.add(new StudentModel(4, "Myra Verma", 1, "Class 1", 4));
+        allStudentsList.add(new StudentModel(5, "Ishaan Yadav", 1, "Class 1", 5));
+
+        // Class 2
+        allStudentsList.add(new StudentModel(6, "Reyansh Mishra", 2, "Class 2", 1));
+        allStudentsList.add(new StudentModel(7, "Siya Patel", 2, "Class 2", 2));
+        allStudentsList.add(new StudentModel(8, "Atharv Tiwari", 2, "Class 2", 3));
+        allStudentsList.add(new StudentModel(9, "Aadhya Khan", 2, "Class 2", 4));
+        allStudentsList.add(new StudentModel(10, "Kabir Saxena", 2, "Class 2", 5));
+
+        // Class 3
+        allStudentsList.add(new StudentModel(11, "Arjun Chauhan", 3, "Class 3", 1));
+        allStudentsList.add(new StudentModel(12, "Kiara Srivastava", 3, "Class 3", 2));
+        allStudentsList.add(new StudentModel(13, "Daksh Pandey", 3, "Class 3", 3));
+        allStudentsList.add(new StudentModel(14, "Avni Agarwal", 3, "Class 3", 4));
+        allStudentsList.add(new StudentModel(15, "Rudra Shukla", 3, "Class 3", 5));
+
+        // Class 4
+        allStudentsList.add(new StudentModel(16, "Shaurya Tripathi", 4, "Class 4", 1));
+        allStudentsList.add(new StudentModel(17, "Pari Singh", 4, "Class 4", 2));
+        allStudentsList.add(new StudentModel(18, "Krishna Yadav", 4, "Class 4", 3));
+        allStudentsList.add(new StudentModel(19, "Navya Jain", 4, "Class 4", 4));
+        allStudentsList.add(new StudentModel(20, "Harsh Rajput", 4, "Class 4", 5));
+
+        // Class 5
+        allStudentsList.add(new StudentModel(21, "Aditya Sharma", 5, "Class 5", 1));
+        allStudentsList.add(new StudentModel(22, "Riya Verma", 5, "Class 5", 2));
+        allStudentsList.add(new StudentModel(23, "Aryan Gupta", 5, "Class 5", 3));
+        allStudentsList.add(new StudentModel(24, "Anika Mishra", 5, "Class 5", 4));
+        allStudentsList.add(new StudentModel(25, "Yash Tiwari", 5, "Class 5", 5));
+
+        // Class 6
+        allStudentsList.add(new StudentModel(26, "Kunal Singh", 6, "Class 6", 1));
+        allStudentsList.add(new StudentModel(27, "Sneha Patel", 6, "Class 6", 2));
+        allStudentsList.add(new StudentModel(28, "Manav Saxena", 6, "Class 6", 3));
+        allStudentsList.add(new StudentModel(29, "Pihu Pandey", 6, "Class 6", 4));
+        allStudentsList.add(new StudentModel(30, "Naitik Chauhan", 6, "Class 6", 5));
+
+        // Class 7
+        allStudentsList.add(new StudentModel(31, "Rohan Agarwal", 7, "Class 7", 1));
+        allStudentsList.add(new StudentModel(32, "Ishita Srivastava", 7, "Class 7", 2));
+        allStudentsList.add(new StudentModel(33, "Dev Shukla", 7, "Class 7", 3));
+        allStudentsList.add(new StudentModel(34, "Meera Jain", 7, "Class 7", 4));
+        allStudentsList.add(new StudentModel(35, "Lakshya Tripathi", 7, "Class 7", 5));
+
+        // Class 8
+        allStudentsList.add(new StudentModel(36, "Samar Yadav", 8, "Class 8", 1));
+        allStudentsList.add(new StudentModel(37, "Aanya Rajput", 8, "Class 8", 2));
+        allStudentsList.add(new StudentModel(38, "Om Prakash", 8, "Class 8", 3));
+        allStudentsList.add(new StudentModel(39, "Tanya Sharma", 8, "Class 8", 4));
+        allStudentsList.add(new StudentModel(40, "Pranav Gupta", 8, "Class 8", 5));
+    }
+
+    private void loadCompetencies() {
+        allCompetencyList.clear();
+
+        // Class 1 Hindi
+        allCompetencyList.add(new CompetencyModel(1, "H101", 1, 1, "हिंदी अक्षरों की पहचान"));
+        allCompetencyList.add(new CompetencyModel(2, "H102", 1, 1, "सरल हिंदी शब्द पढ़ना"));
+        allCompetencyList.add(new CompetencyModel(3, "H103", 1, 1, "सरल हिंदी शब्द लिखना"));
+
+        // Class 1 English
+        allCompetencyList.add(new CompetencyModel(4, "E101", 1, 2, "Recognition of English alphabets"));
+        allCompetencyList.add(new CompetencyModel(5, "E102", 1, 2, "Reading simple English words"));
+        allCompetencyList.add(new CompetencyModel(6, "E103", 1, 2, "Writing simple English words"));
+
+        // Class 1 Math
+        allCompetencyList.add(new CompetencyModel(7, "M101", 1, 3, "Recognition of numbers 1 to 20"));
+        allCompetencyList.add(new CompetencyModel(8, "M102", 1, 3, "Counting objects up to 20"));
+        allCompetencyList.add(new CompetencyModel(9, "M103", 1, 3, "Basic addition using objects"));
+
+        // Class 2 Hindi
+        allCompetencyList.add(new CompetencyModel(10, "H201", 2, 1, "छोटे वाक्य पढ़ना"));
+        allCompetencyList.add(new CompetencyModel(11, "H202", 2, 1, "कहानी सुनकर उत्तर देना"));
+        allCompetencyList.add(new CompetencyModel(12, "H203", 2, 1, "चित्र देखकर वाक्य बनाना"));
+
+        // Class 2 English
+        allCompetencyList.add(new CompetencyModel(13, "E201", 2, 2, "Reading simple sentences"));
+        allCompetencyList.add(new CompetencyModel(14, "E202", 2, 2, "Writing simple sentences"));
+        allCompetencyList.add(new CompetencyModel(15, "E203", 2, 2, "Understanding spoken English words"));
+
+        // Class 2 Math
+        allCompetencyList.add(new CompetencyModel(16, "M201", 2, 3, "Counting numbers up to 100"));
+        allCompetencyList.add(new CompetencyModel(17, "M202", 2, 3, "Two digit addition"));
+        allCompetencyList.add(new CompetencyModel(18, "M203", 2, 3, "Two digit subtraction"));
+
+        // Class 3 Hindi
+        allCompetencyList.add(new CompetencyModel(19, "H301", 3, 1, "अनुच्छेद पढ़कर समझना"));
+        allCompetencyList.add(new CompetencyModel(20, "H302", 3, 1, "श्रुतलेख लिखना"));
+        allCompetencyList.add(new CompetencyModel(21, "H303", 3, 1, "कहानी का सार बताना"));
+
+        // Class 3 English
+        allCompetencyList.add(new CompetencyModel(22, "E301", 3, 2, "Reading short paragraph"));
+        allCompetencyList.add(new CompetencyModel(23, "E302", 3, 2, "Writing short paragraph"));
+        allCompetencyList.add(new CompetencyModel(24, "E303", 3, 2, "Using basic grammar"));
+
+        // Class 3 Math
+        allCompetencyList.add(new CompetencyModel(25, "M301", 3, 3, "Three digit addition"));
+        allCompetencyList.add(new CompetencyModel(26, "M302", 3, 3, "Three digit subtraction"));
+        allCompetencyList.add(new CompetencyModel(27, "M303", 3, 3, "Multiplication tables"));
+
+        // Class 4 Hindi
+        allCompetencyList.add(new CompetencyModel(28, "H401", 4, 1, "गद्यांश पढ़कर प्रश्नों के उत्तर देना"));
+        allCompetencyList.add(new CompetencyModel(29, "H402", 4, 1, "पत्र लेखन का अभ्यास"));
+        allCompetencyList.add(new CompetencyModel(30, "H403", 4, 1, "शुद्ध वर्तनी का प्रयोग"));
+
+        // Class 4 English
+        allCompetencyList.add(new CompetencyModel(31, "E401", 4, 2, "Reading comprehension"));
+        allCompetencyList.add(new CompetencyModel(32, "E402", 4, 2, "Writing short letter"));
+        allCompetencyList.add(new CompetencyModel(33, "E403", 4, 2, "Use of nouns and verbs"));
+
+        // Class 4 Math
+        allCompetencyList.add(new CompetencyModel(34, "M401", 4, 3, "Multiplication of two digit numbers"));
+        allCompetencyList.add(new CompetencyModel(35, "M402", 4, 3, "Division basics"));
+        allCompetencyList.add(new CompetencyModel(36, "M403", 4, 3, "Understanding fractions"));
+
+        // Class 5 Hindi
+        allCompetencyList.add(new CompetencyModel(37, "H501", 5, 1, "कविता का भावार्थ समझना"));
+        allCompetencyList.add(new CompetencyModel(38, "H502", 5, 1, "अनुच्छेद लेखन"));
+        allCompetencyList.add(new CompetencyModel(39, "H503", 5, 1, "व्याकरण का प्रयोग"));
+
+        // Class 5 English
+        allCompetencyList.add(new CompetencyModel(40, "E501", 5, 2, "Paragraph reading"));
+        allCompetencyList.add(new CompetencyModel(41, "E502", 5, 2, "Paragraph writing"));
+        allCompetencyList.add(new CompetencyModel(42, "E503", 5, 2, "Basic tense usage"));
+
+        // Class 5 Math
+        allCompetencyList.add(new CompetencyModel(43, "M501", 5, 3, "Fractions and decimals"));
+        allCompetencyList.add(new CompetencyModel(44, "M502", 5, 3, "Measurement basics"));
+        allCompetencyList.add(new CompetencyModel(45, "M503", 5, 3, "Word problems"));
+
+        // Class 6 Hindi
+        allCompetencyList.add(new CompetencyModel(46, "H601", 6, 1, "कहानी पढ़कर मुख्य विचार बताना"));
+        allCompetencyList.add(new CompetencyModel(47, "H602", 6, 1, "वाक्य रचना और व्याकरण"));
+        allCompetencyList.add(new CompetencyModel(48, "H603", 6, 1, "अपठित गद्यांश समझना"));
+
+        // Class 6 English
+        allCompetencyList.add(new CompetencyModel(49, "E601", 6, 2, "Reading passage and answering questions"));
+        allCompetencyList.add(new CompetencyModel(50, "E602", 6, 2, "Basic grammar and sentence formation"));
+        allCompetencyList.add(new CompetencyModel(51, "E603", 6, 2, "Writing short paragraph"));
+
+        // Class 6 Science
+        allCompetencyList.add(new CompetencyModel(52, "S601", 6, 5, "Basic plant structure"));
+        allCompetencyList.add(new CompetencyModel(53, "S602", 6, 5, "Human body systems"));
+        allCompetencyList.add(new CompetencyModel(54, "S603", 6, 5, "States of matter"));
+
+        // Class 6 Social Science
+        allCompetencyList.add(new CompetencyModel(55, "SS601", 6, 6, "Understanding maps"));
+        allCompetencyList.add(new CompetencyModel(56, "SS602", 6, 6, "Local government awareness"));
+        allCompetencyList.add(new CompetencyModel(57, "SS603", 6, 6, "Historical sources"));
+
+        // Class 7 Hindi
+        allCompetencyList.add(new CompetencyModel(58, "H701", 7, 1, "कविता का भाव समझना"));
+        allCompetencyList.add(new CompetencyModel(59, "H702", 7, 1, "निबंध लेखन"));
+        allCompetencyList.add(new CompetencyModel(60, "H703", 7, 1, "व्याकरण का सही प्रयोग"));
+
+        // Class 7 English
+        allCompetencyList.add(new CompetencyModel(61, "E701", 7, 2, "Comprehension skill"));
+        allCompetencyList.add(new CompetencyModel(62, "E702", 7, 2, "Letter writing"));
+        allCompetencyList.add(new CompetencyModel(63, "E703", 7, 2, "Tense and grammar usage"));
+
+        // Class 7 Science
+        allCompetencyList.add(new CompetencyModel(64, "S701", 7, 5, "Nutrition in plants"));
+        allCompetencyList.add(new CompetencyModel(65, "S702", 7, 5, "Heat and temperature"));
+        allCompetencyList.add(new CompetencyModel(66, "S703", 7, 5, "Respiration in organisms"));
+
+        // Class 7 Social Science
+        allCompetencyList.add(new CompetencyModel(67, "SS701", 7, 6, "Medieval history basics"));
+        allCompetencyList.add(new CompetencyModel(68, "SS702", 7, 6, "Environment and society"));
+        allCompetencyList.add(new CompetencyModel(69, "SS703", 7, 6, "State government system"));
+
+        // Class 8 Hindi
+        allCompetencyList.add(new CompetencyModel(70, "H801", 8, 1, "साहित्यिक पाठ की समझ"));
+        allCompetencyList.add(new CompetencyModel(71, "H802", 8, 1, "रचनात्मक लेखन"));
+        allCompetencyList.add(new CompetencyModel(72, "H803", 8, 1, "मुहावरे और लोकोक्तियाँ"));
+
+        // Class 8 English
+        allCompetencyList.add(new CompetencyModel(73, "E801", 8, 2, "Advanced reading comprehension"));
+        allCompetencyList.add(new CompetencyModel(74, "E802", 8, 2, "Essay writing"));
+        allCompetencyList.add(new CompetencyModel(75, "E803", 8, 2, "Grammar and vocabulary"));
+
+        // Class 8 Science
+        allCompetencyList.add(new CompetencyModel(76, "S801", 8, 5, "Crop production and management"));
+        allCompetencyList.add(new CompetencyModel(77, "S802", 8, 5, "Microorganisms"));
+        allCompetencyList.add(new CompetencyModel(78, "S803", 8, 5, "Force and pressure"));
+
+        // Class 8 Social Science
+        allCompetencyList.add(new CompetencyModel(79, "SS801", 8, 6, "Indian Constitution basics"));
+        allCompetencyList.add(new CompetencyModel(80, "SS802", 8, 6, "Colonial history awareness"));
+        allCompetencyList.add(new CompetencyModel(81, "SS803", 8, 6, "Resources and development"));
+    }
+
+    private void applyFilter() {
+        classWiseStudentsList.clear();
+
+        for (StudentModel student : allStudentsList) {
+            if (student.getClassId() == selectedClassId) {
+                classWiseStudentsList.add(student);
+            }
+        }
+
+        filteredCompetencyList.clear();
+
+        String query = searchText.toLowerCase(Locale.ROOT);
+
+        for (CompetencyModel competency : allCompetencyList) {
+            boolean classMatched = competency.getClassId() == selectedClassId;
+            boolean subjectMatched = competency.getSubjectId() == selectedSubjectId;
+
+            boolean searchMatched =
+                    competency.getCompetencyName().toLowerCase(Locale.ROOT).contains(query)
+                            || competency.getLoCode().toLowerCase(Locale.ROOT).contains(query);
+
+            if (classMatched && subjectMatched && searchMatched) {
+                filteredCompetencyList.add(competency);
+            }
+        }
+
+        updateCount();
+
+        if (competencyAdapter != null) {
+            competencyAdapter.notifyDataSetChanged();
+        }
+    }
+
+    private void updateCount() {
+        tvListTitle.setText(selectedClassName + " - " + selectedSubjectName);
+
+        tvTotalCount.setText(
+                "Competency: " + filteredCompetencyList.size()
+                        + " | Students: " + classWiseStudentsList.size()
+        );
+    }
+
+    private void saveSurveyData() {
+        int totalChecked = 0;
+
+        StringBuilder builder = new StringBuilder();
+        builder.append("Survey Saved\n\n");
+        builder.append("Class ID: ").append(selectedClassId).append("\n");
+        builder.append("Class: ").append(selectedClassName).append("\n");
+        builder.append("Subject ID: ").append(selectedSubjectId).append("\n");
+        builder.append("Subject: ").append(selectedSubjectName).append("\n\n");
+
+        for (CompetencyModel competency : allCompetencyList) {
+            Set<Integer> selectedStudents = competencyStudentSelectionMap.get(competency.getCompetencyId());
+
+            if (selectedStudents != null && !selectedStudents.isEmpty()) {
+                builder.append("LO Code: ")
+                        .append(competency.getLoCode())
+                        .append("\n");
+
+                builder.append("Competency ID: ")
+                        .append(competency.getCompetencyId())
+                        .append("\n");
+
+                builder.append("Competency: ")
+                        .append(competency.getCompetencyName())
+                        .append("\n");
+
+                for (StudentModel student : allStudentsList) {
+                    if (selectedStudents.contains(student.getStudentId())) {
+                        totalChecked++;
+
+                        builder.append(" - Student ID: ")
+                                .append(student.getStudentId())
+                                .append(", ")
+                                .append(student.getStudentName())
+                                .append(" (")
+                                .append(student.getClassName())
+                                .append(")")
+                                .append("\n");
+                    }
+                }
+
+                builder.append("\n");
+            }
+        }
+
+        if (totalChecked == 0) {
+            Toast.makeText(this, "Please select at least one student", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Toast.makeText(this, builder.toString(), Toast.LENGTH_LONG).show();
+
+        /*
+         * Save this mapping into SQLite/local database:
+         *
+         * For every selected student under every competency:
+         *
+         * competency_id
+         * lo_code
+         * class_id
+         * subject_id
+         * student_id
+         * is_checked = 1
+         *
+         * Example insert loop:
+         *
+         * for (CompetencyModel competency : allCompetencyList) {
+         *     Set<Integer> ids = competencyStudentSelectionMap.get(competency.getCompetencyId());
+         *     if (ids != null) {
+         *         for (Integer studentId : ids) {
+         *             insertResult(
+         *                 competency.getCompetencyId(),
+         *                 competency.getLoCode(),
+         *                 competency.getClassId(),
+         *                 competency.getSubjectId(),
+         *                 studentId,
+         *                 1
+         *             );
+         *         }
+         *     }
+         * }
+         */
+    }
+
+
+    public interface ParentRefreshListener {
+        void onParentRefresh();
+    }
+
+    public class CompetencyAdapter extends RecyclerView.Adapter<CompetencyAdapter.CompetencyViewHolder> {
+
+        private final ArrayList<CompetencyModel> competencyList;
+        private final ArrayList<StudentModel> studentList;
+        private final Map<Integer, Set<Integer>> selectionMap;
+
+        public CompetencyAdapter(
+                ArrayList<CompetencyModel> competencyList,
+                ArrayList<StudentModel> studentList,
+                Map<Integer, Set<Integer>> selectionMap
+        ) {
+            this.competencyList = competencyList;
+            this.studentList = studentList;
+            this.selectionMap = selectionMap;
+        }
+
+        @NonNull
+        @Override
+        public CompetencyViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View view = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_competency_parent, parent, false);
+            return new CompetencyViewHolder(view);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull CompetencyViewHolder holder, int position) {
+            CompetencyModel competency = competencyList.get(position);
+
+            holder.tvCompetencyNo.setText(String.format(Locale.getDefault(), "%02d", position + 1));
+
+            holder.tvCompetencyName.setText(
+                    competency.getLoCode() + " - " + competency.getCompetencyName()
+            );
+
+            Set<Integer> selectedStudents = selectionMap.get(competency.getCompetencyId());
+
+            int selectedCount = selectedStudents == null ? 0 : selectedStudents.size();
+            int totalStudents = studentList.size();
+
+            holder.tvCompetencyInfo.setText(
+                    selectedClassName + " • " + selectedSubjectName
+                            + " • Selected " + selectedCount + "/" + totalStudents
+            );
+
+            if (selectedCount == 0) {
+                holder.tvCompetencyStatus.setText("Pending");
+                holder.tvCompetencyStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
+                holder.cardCompetency.setCardBackgroundColor(getResources().getColor(android.R.color.white));
+            } else if (selectedCount < totalStudents) {
+                holder.tvCompetencyStatus.setText("Partial");
+                holder.tvCompetencyStatus.setTextColor(getResources().getColor(android.R.color.holo_orange_dark));
+                holder.cardCompetency.setCardBackgroundColor(getResources().getColor(android.R.color.white));
+            } else {
+                holder.tvCompetencyStatus.setText("Completed");
+                holder.tvCompetencyStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
+                holder.cardCompetency.setCardBackgroundColor(0xFFEAFBF0);
+            }
+
+            ChildStudentAdapter childStudentAdapter = new ChildStudentAdapter(
+                    competency,
+                    studentList,
+                    selectionMap,
+                    () -> {
+                        int currentPosition = holder.getBindingAdapterPosition();
+                        if (currentPosition != RecyclerView.NO_POSITION) {
+                            notifyItemChanged(currentPosition);
+                        }
+                        updateCount();
+                    }
+            );
+
+            holder.recyclerViewChildStudents.setLayoutManager(
+                    new LinearLayoutManager(Nipun_Taliika_Activity.this)
+            );
+
+            holder.recyclerViewChildStudents.setNestedScrollingEnabled(false);
+            holder.recyclerViewChildStudents.setAdapter(childStudentAdapter);
+            holder.btnSaveCompetency.setOnClickListener(v -> {
+                saveSingleCompetencyData(competency);
+
+                int currentPosition = holder.getBindingAdapterPosition();
+                if (currentPosition != RecyclerView.NO_POSITION) {
+                    notifyItemChanged(currentPosition);
+                }
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return competencyList.size();
+        }
+
+        public class CompetencyViewHolder extends RecyclerView.ViewHolder {
+
+            CardView cardCompetency;
+            TextView tvCompetencyNo, tvCompetencyName, tvCompetencyInfo, tvCompetencyStatus;
+            RecyclerView recyclerViewChildStudents;
+            MaterialButton btnSaveCompetency;
+
+            public CompetencyViewHolder(@NonNull View itemView) {
+                super(itemView);
+
+                cardCompetency = itemView.findViewById(R.id.cardCompetency);
+                tvCompetencyNo = itemView.findViewById(R.id.tvCompetencyNo);
+                tvCompetencyName = itemView.findViewById(R.id.tvCompetencyName);
+                tvCompetencyInfo = itemView.findViewById(R.id.tvCompetencyInfo);
+                tvCompetencyStatus = itemView.findViewById(R.id.tvCompetencyStatus);
+                recyclerViewChildStudents = itemView.findViewById(R.id.recyclerViewChildStudents);
+                btnSaveCompetency = itemView.findViewById(R.id.btnSaveCompetency);
+            }
+        }
+    }
+
+    public class ChildStudentAdapter extends RecyclerView.Adapter<ChildStudentAdapter.ChildStudentViewHolder> {
+
+        private final CompetencyModel competency;
+        private final ArrayList<StudentModel> studentList;
+        private final Map<Integer, Set<Integer>> selectionMap;
+        private final ParentRefreshListener parentRefreshListener;
+
+        public ChildStudentAdapter(
+                CompetencyModel competency,
+                ArrayList<StudentModel> studentList,
+                Map<Integer, Set<Integer>> selectionMap,
+                ParentRefreshListener parentRefreshListener
+        ) {
+            this.competency = competency;
+            this.studentList = studentList;
+            this.selectionMap = selectionMap;
+            this.parentRefreshListener = parentRefreshListener;
+        }
+
+        @NonNull
+        @Override
+        public ChildStudentViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View view = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_student_survey, parent, false);
+            return new ChildStudentViewHolder(view);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull ChildStudentViewHolder holder, int position) {
+            StudentModel student = studentList.get(position);
+
+            holder.tvRollNo.setText(String.format(Locale.getDefault(), "%02d", student.getRollNo()));
+            holder.tvStudentName.setText(student.getStudentName());
+            holder.tvStudentClass.setText(student.getClassName());
+
+            Set<Integer> selectedStudents = selectionMap.get(competency.getCompetencyId());
+
+            boolean isChecked = selectedStudents != null
+                    && selectedStudents.contains(student.getStudentId());
+
+            holder.checkBoxStudent.setOnCheckedChangeListener(null);
+            holder.checkBoxStudent.setChecked(isChecked);
+
+            holder.checkBoxStudent.setOnCheckedChangeListener((buttonView, checked) -> {
+                Set<Integer> currentSet = selectionMap.get(competency.getCompetencyId());
+
+                if (currentSet == null) {
+                    currentSet = new HashSet<>();
+                    selectionMap.put(competency.getCompetencyId(), currentSet);
+                }
+
+                if (checked) {
+                    currentSet.add(student.getStudentId());
+                } else {
+                    currentSet.remove(student.getStudentId());
+                }
+
+                if (parentRefreshListener != null) {
+                    parentRefreshListener.onParentRefresh();
+                }
+            });
+
+            holder.itemView.setOnClickListener(v -> {
+                holder.checkBoxStudent.setChecked(!holder.checkBoxStudent.isChecked());
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return studentList.size();
+        }
+
+        public class ChildStudentViewHolder extends RecyclerView.ViewHolder {
+
+            TextView tvRollNo, tvStudentName, tvStudentClass;
+            CheckBox checkBoxStudent;
+
+            public ChildStudentViewHolder(@NonNull View itemView) {
+                super(itemView);
+
+                tvRollNo = itemView.findViewById(R.id.tvRollNo);
+                tvStudentName = itemView.findViewById(R.id.tvStudentName);
+                tvStudentClass = itemView.findViewById(R.id.tvStudentClass);
+                checkBoxStudent = itemView.findViewById(R.id.checkBoxStudent);
+            }
+        }
+    }
+}
+
+------------------------------------------------------XML------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F4F7FB"
+    tools:context=".nipunTalika.Nipun_Taliika_Activity">
+
+    <!-- School Info Header -->
+    <LinearLayout
+        android:id="@+id/layoutSchoolHeader"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_school_header"
+        android:orientation="vertical"
+        android:padding="18dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/tvSchoolName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Green Valley Public School"
+            android:textColor="#FFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvSchoolAddress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Lucknow, Uttar Pradesh"
+            android:textColor="#EAF2FF"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvUdiseCode"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="UDISE: 09270100101"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/tvSurveyDate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Date: 28 Apr 2026"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Filter Card -->
+    <LinearLayout
+        android:id="@+id/layoutFilterCard"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="14dp"
+        android:layout_marginTop="14dp"
+        android:layout_marginEnd="14dp"
+        android:background="@drawable/bg_white_card"
+        android:elevation="4dp"
+        android:orientation="vertical"
+        android:padding="14dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/layoutSchoolHeader">
+
+        <TextView
+            android:id="@+id/tvSurveyFilterTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Survey Filter"
+            android:textColor="#1E293B"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <!-- Class and Subject Row -->
+        <LinearLayout
+            android:id="@+id/layoutClassSubjectRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <!-- Class Spinner -->
+            <LinearLayout
+                android:id="@+id/layoutClassBox"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvClassLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Class"
+                    android:textColor="#475569"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/spinnerClass"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/bg_spinner"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp" />
+
+            </LinearLayout>
+
+            <!-- Subject Spinner -->
+            <LinearLayout
+                android:id="@+id/layoutSubjectBox"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvSubjectLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Subject"
+                    android:textColor="#475569"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/spinnerSubject"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/bg_spinner"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Search Box -->
+        <LinearLayout
+            android:id="@+id/layoutSearchBox"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_search_box"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp">
+
+            <ImageView
+                android:id="@+id/imgSearch"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@android:drawable/ic_menu_search"
+                app:tint="#64748B" />
+
+            <EditText
+                android:id="@+id/etSearch"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@android:color/transparent"
+                android:hint="Search student or competency..."
+                android:inputType="text"
+                android:paddingStart="10dp"
+                android:singleLine="true"
+                android:textColor="#0F172A"
+                android:textColorHint="#94A3B8"
+                android:textSize="14sp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- List Header -->
+    <LinearLayout
+        android:id="@+id/layoutListHeader"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="18dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="18dp"
+        android:orientation="horizontal"
+        android:paddingBottom="8dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/layoutFilterCard">
+
+        <TextView
+            android:id="@+id/tvListTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Students List"
+            android:textColor="#1E293B"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvTotalCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Total: 0"
+            android:textColor="#2563EB"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+    <!-- RecyclerView -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerViewStudents"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipToPadding="false"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="90dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/layoutListHeader"
+        tools:listitem="@layout/item_student_survey" />
+
+    <!-- Save Button -->
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/btnSaveSurvey"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="18dp"
+        android:text="Save Survey"
+        android:textColor="#FFFFFF"
+        android:textStyle="bold"
+        app:backgroundTint="#2563EB"
+        app:icon="@android:drawable/ic_menu_save"
+        app:iconTint="#FFFFFF"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout> 
+
+
+----------------------------------------helper XML ----------------------------------------------------------------------------Competency
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/cardCompetency"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="12dp"
+    app:cardCornerRadius="18dp"
+    app:cardElevation="4dp"
+    app:cardBackgroundColor="#FFFFFF">
+
+    <LinearLayout
+        android:id="@+id/layoutCompetencyRoot"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvCompetencyNo"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:gravity="center"
+                android:text="01"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:background="@drawable/bg_roll_circle" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvCompetencyName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="H101 - हिंदी अक्षरों की पहचान"
+                    android:textColor="#0F172A"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvCompetencyInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Class 1 • Hindi • Selected 0/5"
+                    android:textColor="#64748B"
+                    android:textSize="13sp" />
+
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvCompetencyStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pending"
+                android:textColor="#DC2626"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recyclerViewChildStudents"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:nestedScrollingEnabled="false" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSaveCompetency"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="12dp"
+            android:text="Save This Competency"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            app:backgroundTint="#2563EB"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_menu_save"
+            app:iconTint="#FFFFFF" />
+
+    </LinearLayout>
+
+</androidx.cardview.widget.CardView> 
+
+--------------------------------------------------------------------------------------- Student
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/layoutStudentRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp">
+
+    <TextView
+        android:id="@+id/tvRollNo"
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:gravity="center"
+        android:text="01"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:background="@drawable/bg_roll_circle" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvStudentName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Aarav Sharma"
+            android:textColor="#0F172A"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvStudentClass"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Class 1"
+            android:textColor="#64748B"
+            android:textSize="12sp" />
+
+    </LinearLayout>
+
+    <CheckBox
+        android:id="@+id/checkBoxStudent"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:buttonTint="#2563EB" />
+
+</LinearLayout>
